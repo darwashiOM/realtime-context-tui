@@ -29,11 +29,12 @@ async def test_app_renders_interim_and_final_transcript_lines():
 
 
 @pytest.mark.asyncio
-async def test_is_final_without_speech_final_stays_in_interim():
-    # Deepgram sometimes emits clause-level finals (is_final=True,
-    # speech_final=False) whose text overlaps with the next clause's interim.
-    # These must NOT be committed to the transcript history; they stay in
-    # the interim pane so the next update overwrites them cleanly.
+async def test_is_final_commits_to_transcript():
+    # Diagnostic capture showed Deepgram's clause-level is_final events
+    # (is_final=True, speech_final=False) arrive with clean, non-overlapping
+    # start timestamps at natural clause boundaries. They should commit to
+    # the transcript history; waiting for speech_final (which needs >1s of
+    # silence) leaves normal continuous speech stuck in the interim pane.
     app = TranscribeApp()
     async with app.run_test() as pilot:
         app.append_event(UtteranceEvent(
@@ -41,8 +42,8 @@ async def test_is_final_without_speech_final_stays_in_interim():
             start_ms=0, end_ms=800,
         ))
         await pilot.pause()
-        assert "the key that will" in app.interim_text()
-        assert "the key that will" not in app.transcript_text()
+        assert "the key that will" in app.transcript_text()
+        assert app.interim_text() == ""
 
 
 @pytest.mark.asyncio

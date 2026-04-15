@@ -45,15 +45,16 @@ class TranscribeApp(App):
     # --- Public API used by orchestrator ---
 
     def append_event(self, event: UtteranceEvent) -> None:
-        # Only commit to the finalized transcript when speech_final is True
-        # (speaker actually paused / utterance complete). Deepgram also emits
-        # clause-level finals (is_final=True, speech_final=False) whose text
-        # frequently OVERLAPS with the next clause's interim -- committing
-        # those produces duplicated words in the history
-        # (e.g. "the key the key that will put ..."). Treating them as still-
-        # interim means they're overwritten in place by subsequent updates
-        # until the real end-of-utterance arrives.
-        if event.speech_final:
+        # Commit to the finalized transcript on every is_final=True event,
+        # regardless of speech_final. Diagnostic capture of Deepgram's stream
+        # during continuous speech shows that is_final clauses arrive with
+        # clean, NON-overlapping start timestamps (~4s apart at natural clause
+        # boundaries), while speech_final only fires after >1s of silence --
+        # which rarely happens during normal reading/speaking, so waiting for
+        # it leaves the whole utterance stuck in the interim pane until the
+        # stream closes. is_final=False events are in-progress hypotheses and
+        # update the interim Static in place.
+        if event.is_final:
             log = self.query_one("#transcript", RichLog)
             log.write(event.text)
             self._transcript_lines.append(event.text)
