@@ -94,3 +94,31 @@ async def test_question_y_positions_track_each_question():
         ys = app.question_y_positions()
         assert len(ys) == 2
         assert ys[0] < ys[1]  # Q2 appears after Q1 in the log
+
+
+@pytest.mark.asyncio
+async def test_my_utterance_lands_in_transcript_with_prefix():
+    from rctx.events import UtteranceEvent
+    app = TranscribeApp()
+    async with app.run_test() as pilot:
+        utt = UtteranceEvent(text="okay so the resampler does some math",
+                             is_final=True, speech_final=False, start_ms=0, end_ms=1000)
+        app.on_my_utterance(utt)
+        await pilot.pause()
+        assert "[me]" in app.transcript_text()
+        assert "the resampler does some math" in app.transcript_text()
+
+
+@pytest.mark.asyncio
+async def test_coach_pane_shows_streamed_suggestion():
+    from rctx.events import CoachChunk
+    app = TranscribeApp()
+    async with app.run_test() as pilot:
+        app.on_coach_started(coach_id=1)
+        app.on_coach_chunk(CoachChunk(coach_id=1, text_delta="**Next:** ", is_final=False))
+        app.on_coach_chunk(CoachChunk(coach_id=1, text_delta="Try saying it like this.", is_final=False))
+        app.on_coach_chunk(CoachChunk(coach_id=1, text_delta="", is_final=True))
+        await pilot.pause()
+        text = app.coach_text()
+        assert "coach #1" in text
+        assert "Try saying it like this." in text

@@ -5,7 +5,7 @@ from __future__ import annotations
 from textual.app import App, ComposeResult
 from textual.widgets import Header, RichLog, Static
 
-from .events import QuestionEvent, ResponseChunk, UtteranceEvent
+from .events import CoachChunk, QuestionEvent, ResponseChunk, UtteranceEvent
 
 
 class TranscribeApp(App):
@@ -15,7 +15,8 @@ class TranscribeApp(App):
     Screen { layout: vertical; }
     RichLog#transcript { height: 2fr; border: solid green; padding: 0 1; }
     Static#interim { height: auto; min-height: 1; padding: 0 1; color: $text-muted; }
-    RichLog#qa { height: 3fr; border: solid cyan; padding: 0 1; }
+    RichLog#qa { height: 2fr; border: solid cyan; padding: 0 1; }
+    RichLog#coach { height: 2fr; border: solid magenta; padding: 0 1; }
     Static#status { dock: bottom; height: 1; background: $boost; padding: 0 1; }
     """
 
@@ -35,12 +36,15 @@ class TranscribeApp(App):
         self._qa_lines: list[str] = []
         self._current_response_buf: dict[int, str] = {}
         self._question_y_positions: list[int] = []
+        self._coach_lines: list[str] = []
+        self._current_coach_buf: dict[int, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield RichLog(id="transcript", markup=True, highlight=False, wrap=True)
         yield Static("", id="interim")
         yield RichLog(id="qa", markup=True, highlight=False, wrap=True)
+        yield RichLog(id="coach", markup=True, highlight=False, wrap=True)
         yield Static("starting…", id="status")
 
     # --- public API ---
@@ -95,6 +99,38 @@ class TranscribeApp(App):
         else:
             self._qa_lines.append(chunk.text_delta)
 
+    def on_my_utterance(self, event: UtteranceEvent) -> None:
+        """Render YOUR finalized utterances into the transcript with a [me] prefix."""
+        if event.is_final:
+            line = f"[dim italic][me][/dim italic] {event.text}"
+            self.query_one("#transcript", RichLog).write(line)
+            self._transcript_lines.append(line)
+
+    def on_coach_started(self, coach_id: int) -> None:
+        coach = self.query_one("#coach", RichLog)
+        sep = f"[dim]── coach #{coach_id} ──[/dim]"
+        coach.write(sep)
+        self._coach_lines.append(sep)
+        self._current_coach_buf[coach_id] = ""
+
+    def on_coach_chunk(self, chunk: CoachChunk) -> None:
+        coach = self.query_one("#coach", RichLog)
+        if chunk.is_final:
+            coach.write("")
+            self._coach_lines.append("")
+            self._current_coach_buf.pop(chunk.coach_id, None)
+            return
+        self._current_coach_buf[chunk.coach_id] = (
+            self._current_coach_buf.get(chunk.coach_id, "") + chunk.text_delta
+        )
+        coach.write(chunk.text_delta)
+        if (self._coach_lines
+                and not self._coach_lines[-1].startswith("[dim]── coach")
+                and self._coach_lines[-1] != ""):
+            self._coach_lines[-1] += chunk.text_delta
+        else:
+            self._coach_lines.append(chunk.text_delta)
+
     # --- navigation actions ---
 
     def _scroll_qa_to(self, y: int) -> None:
@@ -139,3 +175,6 @@ class TranscribeApp(App):
 
     def qa_text(self) -> str:
         return "\n".join(self._qa_lines)
+
+    def coach_text(self) -> str:
+        return "\n".join(self._coach_lines)
