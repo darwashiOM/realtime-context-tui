@@ -43,3 +43,12 @@ def test_response_chunk_fields():
     assert rc.question_id == 1
     assert rc.text_delta == "It works by "
     assert rc.citations[0].file == "src/foo.py"
+
+
+def test_coach_chunk_fields():
+    from rctx.events import CoachChunk
+
+    c = CoachChunk(coach_id=3, text_delta="Try saying ", is_final=False)
+    assert c.coach_id == 3
+    assert c.text_delta == "Try saying "
+    assert c.is_final is False

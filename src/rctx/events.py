@@ -62,3 +62,16 @@ class ResponseChunk:
     text_delta: str
     is_final: bool
     citations: tuple[Citation, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CoachChunk:
+    """A streamed piece of a coach suggestion (next-utterance hint).
+
+    ``coach_id`` ties chunks to the speech turn they suggest a continuation
+    for. ``is_final`` marks the last chunk.
+    """
+
+    coach_id: int
+    text_delta: str
+    is_final: bool
