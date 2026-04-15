@@ -19,7 +19,13 @@ class TranscribeApp(App):
     Static#status { dock: bottom; height: 1; background: $boost; padding: 0 1; }
     """
 
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("up", "prev_question", "prev Q"),
+        ("down", "next_question", "next Q"),
+        ("home", "first_question", "first Q"),
+        ("end", "last_question", "last Q"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
@@ -28,6 +34,7 @@ class TranscribeApp(App):
         self._status_text: str = "starting…"
         self._qa_lines: list[str] = []
         self._current_response_buf: dict[int, str] = {}
+        self._question_y_positions: list[int] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -53,8 +60,12 @@ class TranscribeApp(App):
         self.query_one("#status", Static).update(text)
 
     def on_question_detected(self, question: QuestionEvent, question_id: int) -> None:
+        qa = self.query_one("#qa", RichLog)
+        # NOTE: textual 8.2.3 RichLog has no `line_count`; the rendered lines
+        # are exposed as `qa.lines` (a list). Use its length as the Y offset.
+        self._question_y_positions.append(len(qa.lines))
         line = f"[bold cyan]Q{question_id}:[/bold cyan] {question.text}"
-        self.query_one("#qa", RichLog).write(line)
+        qa.write(line)
         self._qa_lines.append(line)
         self._current_response_buf[question_id] = ""
 
@@ -84,7 +95,38 @@ class TranscribeApp(App):
         else:
             self._qa_lines.append(chunk.text_delta)
 
+    # --- navigation actions ---
+
+    def _scroll_qa_to(self, y: int) -> None:
+        qa = self.query_one("#qa", RichLog)
+        qa.scroll_to(y=y, animate=False)
+
+    def action_prev_question(self) -> None:
+        qa = self.query_one("#qa", RichLog)
+        current_y = qa.scroll_y
+        prev = [y for y in self._question_y_positions if y < current_y]
+        if prev:
+            self._scroll_qa_to(prev[-1])
+
+    def action_next_question(self) -> None:
+        qa = self.query_one("#qa", RichLog)
+        current_y = qa.scroll_y
+        nxt = [y for y in self._question_y_positions if y > current_y]
+        if nxt:
+            self._scroll_qa_to(nxt[0])
+
+    def action_first_question(self) -> None:
+        if self._question_y_positions:
+            self._scroll_qa_to(self._question_y_positions[0])
+
+    def action_last_question(self) -> None:
+        if self._question_y_positions:
+            self._scroll_qa_to(self._question_y_positions[-1])
+
     # --- test helpers ---
+
+    def question_y_positions(self) -> list[int]:
+        return list(self._question_y_positions)
 
     def transcript_text(self) -> str:
         return "\n".join(self._transcript_lines)

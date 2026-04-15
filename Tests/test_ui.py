@@ -76,3 +76,21 @@ async def test_qa_pane_renders_question_then_streaming_response_and_citations():
         assert "how does x work" in qa
         assert "It works." in qa
         assert "src/foo.py:1-10" in qa
+
+
+@pytest.mark.asyncio
+async def test_question_y_positions_track_each_question():
+    app = TranscribeApp()
+    async with app.run_test() as pilot:
+        utt = UtteranceEvent(text="q1", is_final=True, speech_final=False,
+                             start_ms=0, end_ms=500)
+        app.on_question_detected(QuestionEvent(text="q1", source_utterance=utt), 1)
+        app.on_response_chunk(ResponseChunk(question_id=1, text_delta="ans", is_final=False))
+        app.on_response_chunk(ResponseChunk(question_id=1, text_delta="", is_final=True))
+
+        app.on_question_detected(QuestionEvent(text="q2", source_utterance=utt), 2)
+        await pilot.pause()
+
+        ys = app.question_y_positions()
+        assert len(ys) == 2
+        assert ys[0] < ys[1]  # Q2 appears after Q1 in the log
