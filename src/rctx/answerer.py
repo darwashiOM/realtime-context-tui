@@ -12,9 +12,21 @@ from .retriever import RetrievalHit
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
 
-def _build_user_turn(q: QuestionEvent, hits: Sequence[RetrievalHit]) -> str:
+def _build_user_turn(
+    q: QuestionEvent,
+    hits: Sequence[RetrievalHit],
+    *,
+    custom_instruction: str = "",
+) -> str:
     """Compose the text content sent as the user turn."""
-    lines = [
+    lines: list[str] = []
+    if custom_instruction:
+        lines.append(
+            f"Session-level instruction from the presenter "
+            f"(follow this for every question): {custom_instruction}"
+        )
+        lines.append("")
+    lines += [
         "A meeting participant just asked me this question. Answer in my voice, "
         "first person. Format the answer EXACTLY like this:",
         "",
@@ -131,10 +143,12 @@ class Answerer:
         *,
         session_id: str,
         model: str = CLAUDE_MODEL,
+        custom_instruction: str = "",
         _spawn_override: Optional[Callable[[], Awaitable]] = None,
     ) -> None:
         self._session_id = session_id
         self._model = model
+        self._custom_instruction = custom_instruction
         self._proc = None
         self._lock = asyncio.Lock()
         self._spawn_override = _spawn_override
@@ -185,7 +199,9 @@ class Answerer:
             raise RuntimeError("Answerer not started")
 
         async with self._lock:
-            user_turn = _build_user_turn(question, hits)
+            user_turn = _build_user_turn(
+                question, hits, custom_instruction=self._custom_instruction
+            )
             payload = json.dumps({
                 "type": "user",
                 "message": {"role": "user", "content": user_turn},

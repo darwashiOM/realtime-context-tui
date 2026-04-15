@@ -156,3 +156,29 @@ async def test_answerer_streams_partial_message_deltas():
     # Final chunk still emitted with empty text_delta and correct id.
     assert chunks[-1].is_final is True
     assert chunks[-1].question_id == 11
+
+
+@pytest.mark.asyncio
+async def test_answerer_prepends_custom_instruction_to_user_turn():
+    lines = [b'{"type":"result","subtype":"success"}\n']
+    fake = _FakeProc(lines)
+
+    async def fake_spawn():
+        return fake
+
+    ans = Answerer(
+        session_id="test",
+        _spawn_override=fake_spawn,
+        custom_instruction="be extra concise",
+    )
+    await ans.start()
+    utt = UtteranceEvent(text="how does x work?", is_final=True,
+                         speech_final=False, start_ms=0, end_ms=500)
+    q = QuestionEvent(text=utt.text, source_utterance=utt)
+
+    async for _ in ans.answer(q, [], question_id=1):
+        pass
+
+    await ans.stop()
+    sent = json.loads(fake.stdin.written[0])
+    assert "be extra concise" in sent["message"]["content"]
