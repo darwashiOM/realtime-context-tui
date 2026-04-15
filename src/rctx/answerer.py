@@ -16,7 +16,20 @@ def _build_user_turn(q: QuestionEvent, hits: Sequence[RetrievalHit]) -> str:
     """Compose the text content sent as the user turn."""
     lines = [
         "A meeting participant just asked me this question. Answer in my voice, "
-        "first person, 2-4 sentences, citing code as file:line_start-line_end when relevant.",
+        "first person. Format the answer EXACTLY like this:",
+        "",
+        "**Short answer:** <one or two plain-English sentences I can say aloud "
+        "right now to the person asking. No jargon, no file names, no line numbers.>",
+        "",
+        "**Where:**",
+        "- `path/file.ext:line_start-line_end` \u2014 <3-7 word description>",
+        "- `path/file.ext:line_start-line_end` \u2014 <3-7 word description>",
+        "",
+        "Rules:",
+        "- Include 2-4 entries under **Where:**; pick the most relevant.",
+        "- Keep each description to 3-7 words.",
+        "- Do not add any other sections, headings, or prose outside this format.",
+        "- Do not wrap the whole answer in a code block.",
         "",
         f"Question: {q.text}",
     ]
