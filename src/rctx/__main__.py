@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .orchestrator import run as run_orchestrator
 from .session_finder import find_most_recent_session
+from .session_picker import list_sessions, prompt_for_session
 
 
 def _find_audio_tap_binary() -> Path:
@@ -26,12 +27,14 @@ def _find_audio_tap_binary() -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="rctx", description="Realtime context TUI.")
-    parser.add_argument("--project", type=Path, required=True,
-                        help="Project dir (its Claude Code session will be resumed).")
+    parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--socket-path", default="/tmp/rctx.sock")
     parser.add_argument("--audio-tap", type=Path, default=None)
-    parser.add_argument("--session-id", default=None,
-                        help="Override auto-detected Claude session ID.")
+    parser.add_argument("--session-id", default=None)
+    parser.add_argument("--custom-instruction", default=None,
+                        help="Preamble for every answer. If omitted, prompt for one.")
+    parser.add_argument("--no-picker", action="store_true",
+                        help="Skip interactive picker; use most-recent session.")
     args = parser.parse_args()
 
     if not os.environ.get("DEEPGRAM_API_KEY"):
@@ -41,14 +44,31 @@ def main() -> int:
         print(f"rctx: --project path does not exist: {args.project}", file=sys.stderr)
         return 2
 
-    sid = args.session_id or find_most_recent_session(args.project)
+    # Session selection
+    sid = args.session_id
+    if sid is None:
+        if args.no_picker:
+            sid = find_most_recent_session(args.project)
+        else:
+            sessions = list_sessions(args.project)
+            if not sessions:
+                print(f"rctx: no Claude sessions for {args.project}. "
+                      "Start one with `claude` in that directory first.", file=sys.stderr)
+                return 2
+            sid = prompt_for_session(sessions)
     if not sid:
-        print(
-            f"rctx: no Claude session found for {args.project}. "
-            "Start one with `claude` in that directory first, or pass --session-id.",
-            file=sys.stderr,
-        )
+        print("rctx: no session chosen, exiting.", file=sys.stderr)
         return 2
+
+    # Custom instruction prompt
+    instruction = args.custom_instruction
+    if instruction is None:
+        print("\nOptional session-level instruction for Claude "
+              "(empty to skip, e.g. 'be extra concise'):", file=sys.stderr)
+        try:
+            instruction = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            instruction = ""
 
     binary = args.audio_tap or _find_audio_tap_binary()
 
@@ -59,6 +79,7 @@ def main() -> int:
                 socket_path=args.socket_path,
                 project_path=args.project,
                 session_id=sid,
+                custom_instruction=instruction or "",
             )
         )
     except KeyboardInterrupt:

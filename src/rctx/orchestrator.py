@@ -20,6 +20,7 @@ async def run(
     socket_path: str,
     project_path: Path,
     session_id: str,
+    custom_instruction: str = "",
 ) -> None:
     app = TranscribeApp()
     qa_counter = itertools.count(1)
@@ -30,7 +31,7 @@ async def run(
         retriever.build()
 
         app.set_status(f"starting claude --resume {session_id[:8]}…")
-        answerer = Answerer(session_id=session_id)
+        answerer = Answerer(session_id=session_id, custom_instruction=custom_instruction)
         await answerer.start()
 
         app.set_status(f"spawning audio-tap → {socket_path}")
