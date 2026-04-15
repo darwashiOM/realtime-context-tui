@@ -20,6 +20,7 @@ async def main() -> int:
         "claude",
         "--resume", args.session_id,
         "--print",
+        "--verbose",  # stream-json output requires --verbose
         "--input-format", "stream-json",
         "--output-format", "stream-json",
         "--model", args.model,
