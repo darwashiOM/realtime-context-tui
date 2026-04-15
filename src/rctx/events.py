@@ -31,3 +31,34 @@ class UtteranceEvent:
     speech_final: bool
     start_ms: int
     end_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class QuestionEvent:
+    """A finalized utterance classified as a question to the presenter."""
+
+    text: str
+    source_utterance: UtteranceEvent
+
+
+@dataclass(frozen=True, slots=True)
+class Citation:
+    """A file:line reference shown in the UI below an answer."""
+
+    file: str
+    line_start: int
+    line_end: int
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseChunk:
+    """A streamed piece of an answer.
+
+    ``question_id`` ties chunks to the question they answer. ``is_final``
+    marks the last chunk (carries the final ``citations`` tuple).
+    """
+
+    question_id: int
+    text_delta: str
+    is_final: bool
+    citations: tuple[Citation, ...] = ()

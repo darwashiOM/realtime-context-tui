@@ -1,4 +1,4 @@
-from rctx.events import Frame, StreamTag, UtteranceEvent
+from rctx.events import Citation, Frame, QuestionEvent, ResponseChunk, StreamTag, UtteranceEvent
 
 
 def test_stream_tag_values():
@@ -27,3 +27,19 @@ def test_utterance_event_fields():
     assert u.is_final is True
     assert u.speech_final is False
     assert u.end_ms - u.start_ms == 1500
+
+
+def test_question_event_wraps_utterance():
+    u = UtteranceEvent(text="how does x work", is_final=True, speech_final=False,
+                       start_ms=0, end_ms=1000)
+    q = QuestionEvent(text="how does x work", source_utterance=u)
+    assert q.text == "how does x work"
+    assert q.source_utterance is u
+
+
+def test_response_chunk_fields():
+    c = Citation(file="src/foo.py", line_start=10, line_end=12)
+    rc = ResponseChunk(question_id=1, text_delta="It works by ", is_final=False, citations=(c,))
+    assert rc.question_id == 1
+    assert rc.text_delta == "It works by "
+    assert rc.citations[0].file == "src/foo.py"
