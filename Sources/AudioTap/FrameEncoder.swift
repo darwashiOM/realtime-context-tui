@@ -27,18 +27,23 @@ enum FrameEncoder {
         return out
     }
 
-    /// Decode one frame. Input must contain exactly one frame; trailing bytes cause `.truncated`.
+    /// Decode one frame from the start of `data`. Trailing bytes beyond the frame are
+    /// ignored (a streaming reader can peel one frame at a time). Returns `.truncated`
+    /// if `data` is shorter than the header or the declared payload length.
+    /// Works on `Data` slices with non-zero `startIndex`.
     static func decode(_ data: Data) throws -> Frame {
         guard data.count >= 9 else { throw FrameDecodeError.truncated }
-        let tagByte = data[data.startIndex]
+        let base = data.startIndex
+        let tagByte = data[base]
         guard let tag = StreamTag(rawValue: tagByte) else {
             throw FrameDecodeError.unknownStreamTag(tagByte)
         }
-        let timestampMs = UInt32(bigEndianBytes: data.subdata(in: (data.startIndex + 1)..<(data.startIndex + 5)))
-        let payloadLen = UInt32(bigEndianBytes: data.subdata(in: (data.startIndex + 5)..<(data.startIndex + 9)))
-        let payloadStart = data.startIndex + 9
+        let timestampMs = UInt32(bigEndianBytes: data.subdata(in: (base + 1)..<(base + 5)))
+        let payloadLen = UInt32(bigEndianBytes: data.subdata(in: (base + 5)..<(base + 9)))
+        // Bounds-check BEFORE computing payloadEnd to avoid Int overflow on huge payloadLen.
+        guard data.count - 9 >= Int(payloadLen) else { throw FrameDecodeError.truncated }
+        let payloadStart = base + 9
         let payloadEnd = payloadStart + Int(payloadLen)
-        guard data.count >= 9 + Int(payloadLen) else { throw FrameDecodeError.truncated }
         let pcm = data.subdata(in: payloadStart..<payloadEnd)
         return Frame(streamTag: tag, timestampMs: timestampMs, pcm: pcm)
     }
