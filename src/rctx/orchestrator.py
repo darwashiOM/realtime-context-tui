@@ -1,4 +1,4 @@
-"""Wire audio-tap -> transcribe -> (transcript + classifier -> retriever -> answerer -> Q+A)."""
+"""Wire audio-tap → 2× transcribe → (transcript + classifier→answer + coach)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from .answerer import Answerer
 from .audio_tap import read_frames, spawn
 from .classifier import is_question
-from .events import QuestionEvent, UtteranceEvent
+from .events import QuestionEvent, StreamTag, UtteranceEvent
 from .retriever import Retriever
 from .transcribe import run as transcribe_run
 from .ui import TranscribeApp
@@ -24,6 +24,26 @@ async def run(
 ) -> None:
     app = TranscribeApp()
     qa_counter = itertools.count(1)
+    coach_counter = itertools.count(1)
+
+    async def them_pump(retriever: Retriever, answerer: Answerer) -> None:
+        frames = read_frames(socket_path)
+        async for ev in transcribe_run(frames, stream_filter=StreamTag.THEM):
+            app.append_event(ev)
+            if ev.is_final and is_question(ev):
+                asyncio.create_task(
+                    _handle_question(ev, retriever, answerer, app, qa_counter)
+                )
+
+    async def me_pump(answerer: Answerer) -> None:
+        frames = read_frames(socket_path)
+        async for ev in transcribe_run(frames, stream_filter=StreamTag.ME):
+            if ev.is_final:
+                app.on_my_utterance(ev)
+                # Fire-and-forget coach
+                asyncio.create_task(
+                    _handle_my_utterance(ev, answerer, app, coach_counter)
+                )
 
     async def pump() -> None:
         app.set_status(f"indexing {project_path}…")
@@ -38,11 +58,9 @@ async def run(
         proc = await spawn(audio_tap_binary, socket_path)
         try:
             app.set_status(f"ready. session={session_id[:8]}…")
-            frames = read_frames(socket_path)
-            async for ev in transcribe_run(frames):
-                app.append_event(ev)
-                if ev.is_final and is_question(ev):
-                    asyncio.create_task(_handle_question(ev, retriever, answerer, app, qa_counter))
+            them_task = asyncio.create_task(them_pump(retriever, answerer))
+            me_task = asyncio.create_task(me_pump(answerer))
+            await asyncio.gather(them_task, me_task)
         finally:
             proc.terminate()
             try:
@@ -78,4 +96,19 @@ async def _handle_question(
         async for chunk in answerer.answer(q, hits, question_id=qid):
             app.on_response_chunk(chunk)
     except Exception as exc:
-        app.set_status(f"RAG error: {exc!r}")
+        app.set_status(f"answer error: {exc!r}")
+
+
+async def _handle_my_utterance(
+    utterance: UtteranceEvent,
+    answerer: Answerer,
+    app: TranscribeApp,
+    counter: "itertools.count[int]",
+) -> None:
+    try:
+        cid = next(counter)
+        app.on_coach_started(cid)
+        async for chunk in answerer.coach(utterance.text, coach_id=cid):
+            app.on_coach_chunk(chunk)
+    except Exception as exc:
+        app.set_status(f"coach error: {exc!r}")
