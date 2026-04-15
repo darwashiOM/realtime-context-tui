@@ -182,3 +182,36 @@ async def test_answerer_prepends_custom_instruction_to_user_turn():
     await ans.stop()
     sent = json.loads(fake.stdin.written[0])
     assert "be extra concise" in sent["message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_answerer_coach_streams_chunks_with_correct_prompt():
+    lines = [
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "**Next:** Try "}}}).encode() + b"\n",
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "saying it this way."}}}).encode() + b"\n",
+        json.dumps({"type": "result", "subtype": "success"}).encode() + b"\n",
+    ]
+    fake = _FakeProc(lines)
+
+    async def fake_spawn():
+        return fake
+
+    ans = Answerer(session_id="test", _spawn_override=fake_spawn)
+    await ans.start()
+
+    chunks = []
+    async for c in ans.coach("um the resampler does some math i think", coach_id=42):
+        chunks.append(c)
+
+    await ans.stop()
+
+    assert chunks[-1].is_final is True
+    assert all(c.coach_id == 42 for c in chunks)
+    body = "".join(c.text_delta for c in chunks if not c.is_final)
+    assert "**Next:**" in body or "Try saying" in body
+
+    sent = json.loads(fake.stdin.written[0])
+    assert "What I just said" in sent["message"]["content"]
+    assert "rewrite" in sent["message"]["content"].lower()  # the coach rule

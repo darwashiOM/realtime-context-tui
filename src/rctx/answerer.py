@@ -6,7 +6,7 @@ import asyncio
 import json
 from typing import AsyncIterator, Awaitable, Callable, Optional, Sequence
 
-from .events import Citation, QuestionEvent, ResponseChunk
+from .events import Citation, CoachChunk, QuestionEvent, ResponseChunk
 from .retriever import RetrievalHit
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -51,6 +51,41 @@ def _build_user_turn(
         for h in hits:
             lines.append(f"--- {h.file}:{h.line_start}-{h.line_end} ---")
             lines.append(h.snippet)
+    return "\n".join(lines)
+
+
+def _build_coach_turn(my_recent_speech: str, custom_instruction: str = "") -> str:
+    """Compose the coach prompt asking for the NEXT utterance, not a rewrite."""
+    lines: list[str] = []
+    if custom_instruction:
+        lines.append(
+            f"Session-level instruction from the presenter "
+            f"(follow this for every suggestion): {custom_instruction}"
+        )
+        lines.append("")
+    lines += [
+        "I'm presenting a project right now. The text below is what I just "
+        "said out loud. Based on our prior project conversation, suggest the "
+        "NEXT thing I should say to do one or more of:",
+        "- Correct a factual mistake I just made",
+        "- Clarify something I left out",
+        "- Move the explanation forward",
+        "",
+        "Do NOT rewrite what I just said. Suggest what comes next.",
+        "",
+        "Format EXACTLY:",
+        "",
+        "**Next:** <one or two sentences I should say next, in my voice, "
+        "confident and conversational. No file paths, no jargon I haven't "
+        "introduced.>",
+        "",
+        "If \u2014 and only if \u2014 I just said something factually wrong, also include:",
+        "**Note:** <one sentence flagging the mistake so I know to correct it>",
+        "",
+        "Do not add any other sections.",
+        "",
+        f"What I just said: {my_recent_speech}",
+    ]
     return "\n".join(lines)
 
 
@@ -243,4 +278,62 @@ class Answerer:
                 text_delta="",
                 is_final=True,
                 citations=citations,
+            )
+
+    async def coach(
+        self,
+        my_recent_speech: str,
+        *,
+        coach_id: int,
+    ) -> AsyncIterator[CoachChunk]:
+        """Stream a coach suggestion for what to say next.
+
+        Shares the same ``claude --resume`` subprocess as ``answer()`` and
+        serializes through ``self._lock`` — one-writer discipline on the
+        session jsonl. Long answers will block coach calls and vice versa;
+        acceptable trade-off to keep the single-session guarantee.
+        """
+        if self._proc is None:
+            raise RuntimeError("Answerer not started")
+
+        async with self._lock:
+            payload = json.dumps({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": _build_coach_turn(
+                        my_recent_speech, self._custom_instruction
+                    ),
+                },
+            }) + "\n"
+            self._proc.stdin.write(payload.encode())
+            await self._proc.stdin.drain()
+
+            saw_delta = False
+            while True:
+                line = await self._proc.stdout.readline()
+                if not line:
+                    break
+                text, is_end, source = _parse_line(line)
+                if text and source == "delta":
+                    saw_delta = True
+                    yield CoachChunk(
+                        coach_id=coach_id,
+                        text_delta=text,
+                        is_final=False,
+                    )
+                elif text and source == "whole" and not saw_delta:
+                    # Fallback when --include-partial-messages isn't active.
+                    yield CoachChunk(
+                        coach_id=coach_id,
+                        text_delta=text,
+                        is_final=False,
+                    )
+                if is_end:
+                    break
+
+            yield CoachChunk(
+                coach_id=coach_id,
+                text_delta="",
+                is_final=True,
             )
