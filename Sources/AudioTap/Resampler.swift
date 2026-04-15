@@ -51,6 +51,14 @@ final class Resampler {
             throw ResamplerError.cannotCreateOutputBuffer
         }
 
+        // Reset the converter before each call. AVAudioConverter is stateful: once its
+        // input-data callback returns `.endOfStream` (which we do below to drain the SRC's
+        // tail), the converter is permanently in an end-of-stream state and every
+        // subsequent `convert(...)` returns 0 frames. Resetting treats each buffer as an
+        // independent conversion — appropriate for our streaming use-case where buffers
+        // arrive on a single queue and we need each one converted in full.
+        converter.reset()
+
         // Drive the conversion: first call supplies the input buffer; subsequent
         // calls signal end-of-stream so the SRC drains its internal filter state.
         // Without this drain step, downsampling drops the trailing ~240 output frames.

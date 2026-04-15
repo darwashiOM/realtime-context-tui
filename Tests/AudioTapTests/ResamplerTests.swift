@@ -24,6 +24,19 @@ final class ResamplerTests: XCTestCase {
         XCTAssertEqual(out.count, 3200)
     }
 
+    /// Regression test: AVAudioConverter is stateful — once its input callback returns
+    /// `.endOfStream` the converter is in a terminal state and emits 0 frames forever.
+    /// The Resampler must reset the converter between calls so back-to-back invocations
+    /// (which is the normal streaming case) all produce non-empty output.
+    func testRepeatedCallsAllProduceNonEmptyOutput() throws {
+        let sut = try Resampler(targetSampleRate: 16000)
+        for i in 0..<5 {
+            let inputBuf = synthBuffer(sampleRate: 48000, frameCount: 4800, fill: 0.5)
+            let out = try sut.resample(inputBuf)
+            XCTAssertEqual(out.count, 3200, "call #\(i) produced \(out.count) bytes (expected 3200)")
+        }
+    }
+
     func testSilenceInputProducesNearZeroOutput() throws {
         let sut = try Resampler(targetSampleRate: 16000)
         let inputBuf = synthBuffer(sampleRate: 48000, frameCount: 4800, fill: 0.0)
