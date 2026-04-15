@@ -29,35 +29,72 @@ def _build_user_turn(q: QuestionEvent, hits: Sequence[RetrievalHit]) -> str:
     return "\n".join(lines)
 
 
-def _parse_line(raw: bytes) -> tuple[str | None, bool]:
+def _parse_line(raw: bytes) -> tuple[str | None, bool, str | None]:
     """Parse one stream-json stdout line.
 
-    Returns (text_delta_or_none, is_end_of_response).
+    Returns (text_or_none, is_end_of_response, source).
+    `source` is "delta" for streaming partials, "whole" for a full
+    assistant message, or None for non-text / control lines. Callers use
+    `source` to dedupe: with --include-partial-messages, both shapes arrive
+    for the same turn and the whole-message line must be dropped.
 
     Schema captured from `claude` v2.1.109 on 2026-04-15 via
-    scripts/claude_stream_diag.py:
+    scripts/claude_stream_diag.py. With --include-partial-messages:
       - {"type":"system","subtype":"init",...}       -> ignored
-      - {"type":"assistant",
-         "message":{"content":[{"type":"text","text":"..."}]}} -> text delta
+      - {"type":"stream_event","event":{"type":"content_block_delta",
+         "delta":{"type":"text_delta","text":"..."}}} -> text delta
+      - {"type":"stream_event","event":{"type":"message_stop"}} -> ignored
+         (result follows; we end on that to avoid cutting off early)
+      - {"type":"assistant","message":{...}}         -> whole message, skipped
+         (would double-count the text we already streamed)
       - {"type":"rate_limit_event",...}              -> ignored
       - {"type":"result","subtype":"success",...}    -> end-of-response
-    Without --include-partial-messages, assistant messages arrive whole rather
-    than as content_block_delta chunks. We still handle both shapes below so
-    the parser keeps working if that flag is ever turned on, or if a future
-    Claude Code version switches to delta-only streaming.
+
+    Without --include-partial-messages, no stream_event lines arrive and the
+    whole `assistant` message carries the text. We still accept that shape
+    as a fallback so we're resilient if the flag name changes or gets
+    dropped in a future Claude Code version.
+
+    The Answerer loop tracks whether any stream_event deltas arrived during
+    this response; if so, the trailing whole-message `assistant` line is
+    suppressed by the loop (not here). This function returns whatever the
+    line contains; dedup is the caller's job.
     """
     try:
         obj = json.loads(raw)
     except json.JSONDecodeError:
-        return None, False
+        return None, False, None
 
     kind = obj.get("type")
 
+    # Unwrap the stream_event envelope used by --include-partial-messages.
+    if kind == "stream_event":
+        ev = obj.get("event", {}) or {}
+        ev_kind = ev.get("type")
+        if ev_kind == "content_block_delta":
+            delta = ev.get("delta", {}) or {}
+            text = delta.get("text", "")
+            if text:
+                return text, False, "delta"
+        # message_start / content_block_start / content_block_stop /
+        # message_delta / message_stop carry no user-visible text and we
+        # prefer to end the response on the top-level `result` line.
+        return None, False, None
+
     # End-of-response signals.
     if kind in ("result", "message_stop"):
-        return None, True
+        return None, True, None
 
-    # Shape (a): full assistant message with a list of content blocks.
+    # Bare content_block_delta (historical / non-wrapped variant).
+    if kind == "content_block_delta":
+        delta = obj.get("delta", {}) or {}
+        text = delta.get("text", "")
+        if text:
+            return text, False, "delta"
+
+    # Whole assistant message with a list of content blocks. Only useful
+    # when partials are off; the Answerer loop suppresses this if it has
+    # already seen stream_event deltas for the current turn.
     if kind == "assistant":
         msg = obj.get("message", {})
         content = msg.get("content", [])
@@ -68,16 +105,9 @@ def _parse_line(raw: bytes) -> tuple[str | None, bool]:
             ]
             joined = "".join(text_parts)
             if joined:
-                return joined, False
+                return joined, False, "whole"
 
-    # Shape (b): incremental text_delta event (when --include-partial-messages).
-    if kind == "content_block_delta":
-        delta = obj.get("delta", {})
-        text = delta.get("text", "")
-        if text:
-            return text, False
-
-    return None, False
+    return None, False, None
 
 
 class Answerer:
@@ -108,6 +138,7 @@ class Answerer:
             "--verbose",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
+            "--include-partial-messages",
             "--model", self._model,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -149,15 +180,26 @@ class Answerer:
             self._proc.stdin.write(payload.encode())
             await self._proc.stdin.drain()
 
+            saw_delta = False
             while True:
                 line = await self._proc.stdout.readline()
                 if not line:
                     break
-                delta, is_end = _parse_line(line)
-                if delta:
+                text, is_end, source = _parse_line(line)
+                if text and source == "delta":
+                    saw_delta = True
                     yield ResponseChunk(
                         question_id=question_id,
-                        text_delta=delta,
+                        text_delta=text,
+                        is_final=False,
+                    )
+                elif text and source == "whole" and not saw_delta:
+                    # Fallback when --include-partial-messages isn't active:
+                    # no stream_event deltas arrived, so emit the whole
+                    # assistant message as a single chunk.
+                    yield ResponseChunk(
+                        question_id=question_id,
+                        text_delta=text,
                         is_final=False,
                     )
                 if is_end:

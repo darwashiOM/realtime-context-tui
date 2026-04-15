@@ -47,12 +47,15 @@ class _FakeProc:
 
 @pytest.mark.asyncio
 async def test_answerer_streams_deltas_and_emits_final():
-    # Schema captured from `claude --resume ... --print --verbose
-    # --input-format stream-json --output-format stream-json` on v2.1.109:
-    #   {"type":"system","subtype":"init",...}         -> ignored
-    #   {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}} -> text
-    #   {"type":"rate_limit_event",...}                -> ignored
-    #   {"type":"result","subtype":"success",...}      -> end-of-response
+    """Whole-message fallback path (no --include-partial-messages).
+
+    Schema captured from `claude --resume ... --print --verbose
+    --input-format stream-json --output-format stream-json` on v2.1.109:
+      {"type":"system","subtype":"init",...}         -> ignored
+      {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}} -> text
+      {"type":"rate_limit_event",...}                -> ignored
+      {"type":"result","subtype":"success",...}      -> end-of-response
+    """
     lines = [
         json.dumps({"type": "system", "subtype": "init", "session_id": "s"}).encode() + b"\n",
         json.dumps({"type": "assistant",
@@ -93,3 +96,63 @@ async def test_answerer_streams_deltas_and_emits_final():
     sent = json.loads(fake.stdin.written[0])
     assert sent["type"] == "user"
     assert "how does resample work" in sent["message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_answerer_streams_partial_message_deltas():
+    """With --include-partial-messages, claude v2.1.109 emits content_block_delta
+    wrapped in a stream_event envelope. The trailing whole `assistant` message
+    must be suppressed to avoid double-counting the text."""
+    lines = [
+        json.dumps({"type": "system", "subtype": "init", "session_id": "s"}).encode() + b"\n",
+        json.dumps({"type": "stream_event",
+                    "event": {"type": "message_start",
+                              "message": {"role": "assistant", "content": []}}}).encode() + b"\n",
+        json.dumps({"type": "stream_event",
+                    "event": {"type": "content_block_start", "index": 0,
+                              "content_block": {"type": "text", "text": ""}}}).encode() + b"\n",
+        json.dumps({"type": "stream_event",
+                    "event": {"type": "content_block_delta", "index": 0,
+                              "delta": {"type": "text_delta", "text": "Re"}}}).encode() + b"\n",
+        json.dumps({"type": "stream_event",
+                    "event": {"type": "content_block_delta", "index": 0,
+                              "delta": {"type": "text_delta",
+                                        "text": "sampling uses AVAudioConverter."}}}).encode() + b"\n",
+        # Whole assistant message comes too; must be deduped.
+        json.dumps({"type": "assistant",
+                    "message": {"content": [{"type": "text",
+                                              "text": "Resampling uses AVAudioConverter."}]}}).encode() + b"\n",
+        json.dumps({"type": "stream_event",
+                    "event": {"type": "content_block_stop", "index": 0}}).encode() + b"\n",
+        json.dumps({"type": "stream_event",
+                    "event": {"type": "message_stop"}}).encode() + b"\n",
+        json.dumps({"type": "result", "subtype": "success"}).encode() + b"\n",
+    ]
+    fake = _FakeProc(lines)
+
+    async def fake_spawn():
+        return fake
+
+    ans = Answerer(session_id="test-session-id", _spawn_override=fake_spawn)
+    await ans.start()
+
+    utt = UtteranceEvent(text="how does resample work?", is_final=True,
+                         speech_final=False, start_ms=0, end_ms=1000)
+    q = QuestionEvent(text=utt.text, source_utterance=utt)
+    hits: list[RetrievalHit] = []
+
+    chunks = []
+    async for chunk in ans.answer(q, hits, question_id=11):
+        chunks.append(chunk)
+
+    await ans.stop()
+
+    # Text chunks in order. Deltas fire as they arrive - responsive UX.
+    text_chunks = [c.text_delta for c in chunks if c.text_delta]
+    assert text_chunks == ["Re", "sampling uses AVAudioConverter."], (
+        f"Expected two delta chunks in order; got: {text_chunks}. "
+        f"If a third chunk appeared, the whole-message dedup broke."
+    )
+    # Final chunk still emitted with empty text_delta and correct id.
+    assert chunks[-1].is_final is True
+    assert chunks[-1].question_id == 11

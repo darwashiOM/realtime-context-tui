@@ -23,6 +23,7 @@ async def main() -> int:
         "--verbose",  # stream-json output requires --verbose
         "--input-format", "stream-json",
         "--output-format", "stream-json",
+        "--include-partial-messages",
         "--model", args.model,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
