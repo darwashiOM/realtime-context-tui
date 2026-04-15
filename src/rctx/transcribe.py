@@ -34,8 +34,12 @@ async def run(
     *,
     url: str | None = None,
     api_key: str | None = None,
+    stream_filter: StreamTag = StreamTag.THEM,
 ) -> AsyncIterator[UtteranceEvent]:
-    """Stream ``THEM`` frames to Deepgram; yield events in arrival order.
+    """Stream frames matching ``stream_filter`` to Deepgram; yield events in arrival order.
+
+    Defaults to ``StreamTag.THEM``. Pass ``stream_filter=StreamTag.ME`` to
+    transcribe your own mic instead (e.g. for the self-coach pipeline).
 
     The mock-test server uses a path-only URL; production uses the full
     DEFAULT_DEEPGRAM_URL with all params. ``api_key`` falls back to
@@ -54,7 +58,7 @@ async def run(
         async def send_loop() -> None:
             try:
                 async for frame in frames:
-                    if frame.stream_tag == StreamTag.THEM and frame.pcm:
+                    if frame.stream_tag == stream_filter and frame.pcm:
                         await ws.send(frame.pcm)
                 # Tell Deepgram we're done so it can emit any final transcript.
                 try:

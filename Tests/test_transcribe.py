@@ -90,3 +90,65 @@ async def test_transcribe_emits_events_from_mock_deepgram():
     assert out[1].speech_final is True
     # 'me' frame must NOT have been forwarded; only the 3 'them' frames.
     assert len(received_pcm) == 3 * 640
+
+
+@pytest.mark.asyncio
+async def test_transcribe_filters_to_me_when_requested():
+    """With stream_filter=StreamTag.ME, only ME frames are forwarded and
+    THEM frames are dropped — the inverse of the default."""
+    received_pcm = bytearray()
+    server_done = asyncio.Event()
+
+    async def mock_dg(ws):
+        async def reader():
+            try:
+                async for msg in ws:
+                    if isinstance(msg, (bytes, bytearray, memoryview)):
+                        received_pcm.extend(bytes(msg))
+            except websockets.ConnectionClosed:
+                pass
+
+        reader_task = asyncio.create_task(reader())
+        try:
+            await ws.send(json.dumps({
+                "type": "Results",
+                "channel": {"alternatives": [{"transcript": "ok"}]},
+                "is_final": True,
+                "speech_final": True,
+                "start": 0.0,
+                "duration": 0.5,
+            }))
+            await asyncio.sleep(0.2)
+        finally:
+            await ws.close()
+            reader_task.cancel()
+            try:
+                await reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            server_done.set()
+
+    server = await websockets.serve(mock_dg, "127.0.0.1", 0)
+    try:
+        port = next(iter(server.sockets)).getsockname()[1]
+        mock_url = f"ws://127.0.0.1:{port}/v1/listen"
+
+        async def frames() -> AsyncIterator[Frame]:
+            yield Frame(stream_tag=StreamTag.THEM, timestamp_ms=0, pcm=b"\x00\x01" * 320)
+            yield Frame(stream_tag=StreamTag.ME, timestamp_ms=20, pcm=b"\x02\x03" * 320)
+            yield Frame(stream_tag=StreamTag.ME, timestamp_ms=40, pcm=b"\x04\x05" * 320)
+
+        out: list[UtteranceEvent] = []
+        async for ev in transcribe_run(
+            frames(), url=mock_url, api_key="dummy", stream_filter=StreamTag.ME
+        ):
+            out.append(ev)
+
+        await asyncio.wait_for(server_done.wait(), timeout=2.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    # Only 2 ME frames × 640 bytes = 1280; THEM frame must be skipped.
+    assert len(received_pcm) == 2 * 640
+    assert any(e.text == "ok" for e in out)
