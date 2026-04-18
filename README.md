@@ -15,18 +15,5 @@ Useful when you're working alongside audio — following a lecture, listening to
 - macOS 13+ (ScreenCaptureKit)
 - Python 3.12+ via [`uv`](https://docs.astral.sh/uv/)
 - Swift 5.9+
-- `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`
+- `DEEPGRAM_API_KEY`
 
-## Run
-
-```sh
-rctx --project ~/code/my-project
-```
-
-## Status
-
-Design phase. See [`docs/superpowers/specs/2026-04-15-realtime-context-tui-design.md`](docs/superpowers/specs/2026-04-15-realtime-context-tui-design.md) for the full design. Implementation plan and code to follow.
-
-## License
-
-MIT
